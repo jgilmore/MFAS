@@ -1,0 +1,869 @@
+--Multi Farming Autonomous Script V2 By Mendoza
+--Extensive changes (V3) by John Gilmore
+
+-- Design:
+--    We keep state in global variables, because we may be interuppted (quit minecraft, whatever) at any moment.
+--  So we want to resume exactly where we left off.
+
+function usage()
+print("---------------------------------------")
+print("MFAS V3")
+print("Originally by Mendoza")
+print("Extensively modified by John Gilmore")
+print("MFAS        Bog-standard. Run initial")
+print("            config if the config file")
+print("            doesn't exist. Otherwise")
+print("            continue the harvest.")
+print("MFAS menu   display the menu")
+print("MFAS reset  turtle is now at \"home\"")
+print("MFAS RESET  re-run initial configuation")
+print("  Hold ctrl-T terminate program later  ")
+print("---------------------------------------")
+end
+
+-- Read in our variables. No variable is refered to by name here, so so you DON'T 
+-- need to modify this routine to add (or remove) a global variable, and/or get it
+-- saved to disk for later use. Modify "save" and "init_variables" instead.
+function restore()
+	if fs.exists("VALUES") == false then return end
+	local h = fs.open("VALUES", "r")
+	-- Generic "for" expects an iter type - the readLine function "looks" the same (returns values until it returns nil), so we'll just use it.
+	for line in h.readLine do
+		local var,value=split(line,":")
+		if var ~= nil and value ~= nil then
+			-- _G is the table (or array, whatever) of global variables, including function names.
+			-- here we write to it directly so set or even create our list of variables.
+			if string.sub(value,1,1) == "s" then
+				_G[var]=string.sub(value,2)
+			else
+				_G[var]=tonumber(value)
+			end
+		end
+	end
+	h.close()
+	if runlevel == nil then
+		print("Tried to read our VALUES file and failed! runlevel can't be nil!")
+		exit()
+		os.exit()
+	end
+	print("Resuming: runlevel="..runlevel)
+end
+
+-- This routine is called for hard reset, and also inital run.
+-- Necessary in part because the "save" function assumes these global aready exist, and have a value.
+function init_variables()
+	f = 1
+	wallblockname = ""
+	x =0 y =0 z =0 distance =0 tgtx =0 tgty =0 tgtz =0 tgtf =0 items =0 titems =0 tgtfuel =0 ichestside =0 fchestside =0 option =0 mfmode =0 delay =0 runlevel =0 remaining =0 
+	nextturn = -1
+	complex=""
+	attemptplant=""
+end
+
+-- Saves the important global variables to a file on disk.
+-- There's a better way to do this, of course, (have an array of names, read them by referencing _G and write them and their values to disk)
+-- but this works. Note that strings are prefixed with an "s" and everything else is assumed (on read) to be a number.
+-- The restore function doesn't handle arrays, so don't save any unless/until you fix that...
+function save()
+	local h = fs.open("VALUES", "w")
+	if x == nil then
+		init_variables()
+	end
+	h.writeLine("x:"..x) h.writeLine("y:"..y) h.writeLine("z:"..z) h.writeLine("f:"..f)
+	h.writeLine("tgtx:"..tgtx) h.writeLine("tgty:"..tgty) h.writeLine("tgtz:"..tgtz) h.writeLine("tgtf:"..tgtf)
+	h.writeLine("distance:"..distance) h.writeLine("wallblockname:s"..wallblockname)
+	h.writeLine("nextturn:"..nextturn) h.writeLine("items:"..items) h.writeLine("titems:"..titems)
+	h.writeLine("tgtfuel:"..tgtfuel) h.writeLine("ichestside:"..ichestside) h.writeLine("fchestside:"..fchestside) h.writeLine("option:"..option)
+	h.writeLine("mfmode:"..mfmode) h.writeLine("delay:"..delay) h.writeLine("runlevel:"..runlevel) 
+	h.writeLine("remaining:"..remaining)
+	--h.writeLine("nextlevel:"..nextlevel)
+	h.writeLine("complex:s"..complex)
+	h.writeLine("attemptplant:s"..attemptplant)
+	h.close()
+end
+
+-- simple string splitting routine, used by "restore" mostly.
+-- Only handles ONE split point (does NOT split into more than two parts)
+-- so it's not up to string.split standards, but works well enough for here.
+function split(str,divide)
+	s,e = string.find(str,divide)
+	if s == 1 then
+		return "", string.sub(str,e+1)
+	elseif s == nil then
+		return str, ""
+	end
+	return string.sub(str,1,s-1), string.sub(str,e+1)
+end
+
+-- pass the item name ("minecraft:carrots") and the selected slot will contain it
+-- uses string.find against the item name, so "plant(finditem("seed"))" will probably work.
+-- return true on success
+function finditem(item)
+	for slot=1,16 do
+		local this=turtle.getItemDetail(slot)
+		if this and string.find(this["name"],item) then
+			turtle.select(slot)
+			return true
+		end
+	end
+	return false
+end
+
+--places (down) one of the passed items (if we have one available)
+function plant(item)
+	if finditem(item) then turtle.placeDown() end
+end
+
+-- Harvests and replants the block below us.
+-- is aware of the different mods plants, attempts to replant the same stuff.
+-- TODO: Keep track of the "missing" seeds (pam's harvest craft must craft the seeds from the finished plants)
+-- and, next time we're "home" craft the needed seeds (can't do it now, b/c inventory MUST be empty to craft)
+function harvest()
+	local result,block = turtle.inspectDown()
+	if result then
+		local metadata=block["metadata"]
+		local module,block = split(block["name"],":")
+		if module == "minecraft" then
+			-- ignore pumpkin and melon stems, and reeds (reeds are harvested only from the second block up...)
+			if block == "melon_stem" or block == "pumpkin_stem" or block == "sugarcane" then return end
+			--all minecraft crops are ripe on metadata=7
+			if metadata == 7 then
+				turtle.digDown()
+				if block == "wheat" then
+					-- don't know if this is correct if pam's harvestcraft isn't installed
+					plant("minecraft:wheat_seeds")
+				elseif block == "carrots" then
+					plant("minecraft:carrot")
+				elseif block == "potatoes" then
+					plant("minecraft:potatoe")
+				end
+			end
+		elseif module == "magicalcrops" then
+			turtle.digDown()
+			--So many, not attempting to replant exactly the same?
+			plant(module)
+		elseif module == "witchery" then
+			--witchery crops have four growth stages..
+			if metadata == 4 then
+				turtle.digDown()
+				plant(module..":seeds"..block)
+			end
+		elseif module == "harvestcraft" then
+			if metadata == 7 then
+				turtle.digDown()
+				-- craft it into a seed! "pamryeCrop" = "ryeseedItem"
+				-- TODO: Can't craft, have items in inventory... We're screwed? 
+				-- For now, harvestcraft items must be manually crafted into seeds, 
+				-- and given to the turtle manually. In the future, maybe we could make a note to come back here
+				-- after we've gone back home and dropped stuff off so we can craft seeds?
+				crop,junk=split(block,"Crop")
+				junk,crop=split(crop,"pam")
+				plant(module..":"..crop.."seedItem")
+			end
+		else
+			-- Unknown module's plant below us. Attempt a generic replanting.
+			turtle.digDown()
+			plant(module)
+		end
+	end
+	--May have harvested, but couldn't replant, attempt to replant
+	result,block = turtle.inspectDown()
+	if not result or block["name"] == nil then
+		--attempt to plant a seed in empty farmland?
+		--attempts to plant any item in inventory which happens to be called "seed" anywhere in its name.
+		if attemptplant ~= nil and attemptplant ~= "" then
+			plant(attemptplant) 
+		end
+		return
+	end
+	-- Sugar Cane Harvesting
+	if not hitawall() and turtle.detect() == true then
+		turtle.dig()
+		turtle.suck()
+		turtle.suckUp()
+		turtle.suckDown()
+	end
+end
+
+
+-- Go forwards one block, harvesting reeds if needed. Go around water/lava etc. (one block of water/lava only!)
+function forward()
+	--If we're going forward, it won't hurt to check if we can harvest this block (and/or sugarcane we're about to move into)
+	harvest()
+
+	-- go around flowing column of water (and maybe otehr fluids)
+	if turtle.detect() == false then
+		local success,data = turtle.inspect()
+		if success and (string.find(data.name, "flowing") ~= 0) then
+		-- encountered water, go around it (Fails HORRIBLY if water is not surrounded by accessible space)
+		-- TODO: fix that.
+			gocomplex("lfrffrfl")
+			return
+		end
+	end
+	if turtle.forward() == true then
+	distance = (distance + 1)
+	if f == 1 then z = (z + 1)
+	elseif f == 2 then x = (x + 1)
+	elseif f == 3 then z = (z - 1)
+	elseif f == 4 then x = (x - 1)
+	end
+	end
+	save()
+end
+function right()
+	turtle.turnRight()
+	if f == 4 then f = 1 else f = (f + 1) end
+	save()
+end
+function left()
+	turtle.turnLeft()
+	if f == 1 then f = 4 else f = (f - 1) end
+	save()
+end
+function up()
+	if turtle.up() == true then
+		distance = (distance + 1)
+		y = (y + 1)
+		save()
+	end
+end
+function down()
+	if turtle.down()== true then
+		distance = (distance + 1)
+		y = (y - 1)
+	end
+	save()
+end
+function rotate(tgtf)
+	if tgtf ~= f then
+		if (tgtf - 3) == f then left()
+		elseif (tgtf + 3) == f then right()
+		elseif tgtf < f == true 
+			then repeat left() until f == tgtf 
+			else repeat right() until f == tgtf
+		end
+	end
+	save()
+end
+
+
+
+-- ??? This is the only function untouched from MFAS V2
+-- Works, and though it's not truely interruptable, its destination is saved elsewhere.
+function go(tgtx, tgty, tgtz, tgtf)
+	if y ~= tgty then
+		repeat
+			if x < 0 then rotate(2)
+			elseif x > 0 then rotate(4)
+			end
+			if turtle.detect() == false and x ~= 0 then repeat forward() until x == 0 or turtle.detect() == true end
+			if z < 0 then rotate(1)
+			elseif z > 0 then rotate(3)
+			end
+			if turtle.detect() == false and z ~= 0 then repeat forward() until z == 0 or turtle.detect() == true end
+			if y < tgty then if turtle.detectUp() == false then repeat up() until y == tgty or turtle.detectUp() == true end
+			elseif y > tgty then if turtle.detectDown() == false then repeat down() until y == tgty or turtle.detectDown() == true end
+			end
+		until (x == 0) == true and (z == 0) == true and (y == tgty) == true
+		repeat
+			if x < tgtx then rotate(2)
+			elseif x > tgtx then rotate(4)
+			end
+			if turtle.detect() == false and x ~= tgtx then repeat forward() until x == tgtx or turtle.detect() == true end
+			if z < tgtz then rotate(1)
+			elseif z > tgtz then rotate(3)
+			end
+			if turtle.detect() == false and z ~= tgtz then repeat forward() until z == tgtz or turtle.detect() == true end
+		until (x == tgtx) == true and (z == tgtz) == true
+	else
+		repeat
+			if z < tgtz then rotate(1)
+			elseif z > tgtz then rotate(3)
+			end
+			if turtle.detect() == false and z ~= tgtz then repeat forward() until z == tgtz or turtle.detect() == true end
+			if x < tgtx then rotate(2)
+			elseif x > tgtx then rotate(4)
+			end
+			if turtle.detect() == false and x ~= tgtx then repeat forward() until x == tgtx or turtle.detect() == true end
+		until (x == tgtx) == true and (z == tgtz) == true
+	end
+	rotate(tgtf)
+end
+
+--Remove the first letter from the global string "complex"
+function complexpop()
+	complex = string.sub(complex,2)
+end
+
+-- make a complex movement, and resume a complex movement if we're interrupted.
+-- needed because we might be interrupted while going back for fuel, or going up to the next level, or going around a waterfall.
+-- Handles end of level and end of farming conditions.
+--
+-- Kinda hate it, almost making a new language to control the turtle. If you have a better idea, fix it!
+--
+-- BUG: Complicated
+-- Documentation: 
+--   Call to initiate (or, with no parameters, continue) a movement sequence.
+--  W (Wait for timer or redstone signal)
+--  rlfud (go specified direction)(not that if we try to go forward into a wall, we assume we're done with the level, and react accordingly)
+--  H (go home)
+--  h (go to start of level, i.e.  x=0, z=0, y=y)
+--  U (go up until we see farmland. If we see wall above us, we're done, go home and wait)
+--  B (Go back to saved location, in global variables tgtx tgty tgtz tgtf)
+--  
+--   These are "complex" movements in and of themselves, BUT! it's interruptable/repeatable. Sort of
+--  S (run setup, but don't refuel)
+--  F (run setup, and refuel)
+function gocomplex(new)
+	if new ~= nil then
+		print("new complex movement:"..new)
+		complex = new..complex
+		if string.len(complex) > 200 then
+			print("BORK! To long a complex movement?"..complex)
+			os.exit()
+		end
+		runlevel = 4
+		save()
+	end
+	repeat
+		info()
+		if string.sub(complex,1,1)=="H" then
+			go(0,0,0,1)
+			complexpop()
+		elseif string.sub(complex,1,1)=="h" then
+			go(0,y,0,1)
+			complexpop()
+		elseif string.sub(complex,1,1)=="B" then
+			go(tgtx, tgty, tgtz, tgtf)
+			complexpop()
+		elseif string.sub(complex,1,1)=="S" then
+			setup(0)
+			complexpop()
+		elseif string.sub(complex,1,1)=="F" then
+			if distance ~= 0 then
+				setup(distance)
+			else
+				setup(1000)
+			end
+			complexpop()
+		elseif string.sub(complex,1,1)=="U" then 
+			-- super "up" (up until we hit a wall, or see farmland)
+			if mfmode == 1 then
+				up()
+			end
+			-- pop only if we see a farmland block, dirt block, or such.
+			local success,block = turtle.inspect()
+			if success and (block.name == "minecraft:farmland" or block.name == "minecraft:dirt") then
+				complexpop()
+			end
+			-- If we see a wall above, or if we're in single level mode: we're done, go home and wait.
+			success,block = turtle.inspectUp()
+			if mfmode == 0 or success and block.name == wallblockname then
+				complex = 'HFW'
+			end
+		elseif string.sub(complex,1,1)=="W" then 
+			-- is for "done" not super "down"
+			runlevel = 3 -- Wait after going home
+			save()
+			complex = ""
+			return
+		elseif string.sub(complex,1,1)=="f" then
+			if hitawall() then
+				--Done with level, go home (little h)
+				print("Done with Level")
+				-- If we had an even number of rows, we need to swap "nextturn" around...
+				-- NVMD, just set it to -1 again, and we'll determine it empirically on the next level.
+				nextturn = -1
+				if mfmode == 1 then
+					--We are now in the column
+					--TODO: Crash avoidance with other turtles, to allow more than one turtle to do a farm. Almost certainly only
+					--needed on up/down movements. (the all move the same direction, can't collide, unless one is refueling/done/otherwise going home.)
+					--Probably the way to do that is go up one level before going home...maybe.
+					complex="hUuu"
+				else
+					--Go home, refuel for next run, wait
+					complex="HFW"
+				end
+			else
+				forward()
+				complexpop()
+			end
+		elseif string.sub(complex,1,1)=="l" then complexpop() left()
+		elseif string.sub(complex,1,1)=="r" then complexpop() right()
+		elseif string.sub(complex,1,1)=="u" then complexpop() up()
+		elseif string.sub(complex,1,1)=="d" then complexpop() down()
+		else
+			print("BORK! Unkown movement in complex directions:"..complex)
+			os.exit()
+		end
+	until complex == ""
+	runlevel = 2
+	save()
+	info()
+	print("Done with complex movements, back to regular farming")
+end
+
+function hitawall()
+	local success,data = turtle.inspect()
+
+	if not success then return false end
+	-- Note that a chest is considered a wall too. Needed because at least some of the walls
+	-- MUST be a chest for us to drop off our items.
+	if data.name == wallblockname or data.name == "minecraft:chest" then
+		return true
+	end
+	return false
+end
+
+-- print harvest info for the user.
+function info()
+	term.clear()
+	term.setCursorPos(1,1)
+	print("[       MFAS V3 STATUS REPORT         ]")
+	print("---------------------------------------")
+	print("Total blocks travelled:".. distance)
+	print("Total items Returned to Chest:".. titems)
+	print("Total items harvested:".. titems)
+	print("x="..x.." y="..y.." z="..z.." f="..f)
+	print("runlevel="..runlevel)
+	print("wallblock="..wallblockname)
+	print("fuel level="..turtle.getFuelLevel())
+	print("complex todo="..complex)
+	print("")
+	print("")
+	term.setCursorPos(1,12)
+	print("---------------------------------------")
+	term.setCursorPos(1,7)
+end
+
+-- all the sub-options menues. Specify which one when calling.
+-- Note that once called, the user MUST select one.
+-- this is required because we need a valid configuration
+-- when we exit.
+function options(option)
+	if option == 1 then
+		repeat
+			term.clear()
+			term.setCursorPos(1,1)
+			print("[           MULTIFLOOR MODE           ]")
+			print("---------------------------------------")
+			term.setCursorPos(1,3)
+			print("1-Enable")
+			term.setCursorPos(1,5)
+			print("0-Disable")
+			term.setCursorPos(1,7)
+			if mfmode == 1 then
+				print("currently enabled")
+			elseif mfmode == 0 then
+				print("currently disabled")
+			else
+				print("currently not set")
+			end
+			term.setCursorPos(1,11)
+			print("Type the number and press enter")
+			term.setCursorPos(1,12)
+			print("---------------------------------------")
+			term.setCursorPos(1,13)
+			mfmode = (io.read() * 1)
+		until mfmode == 1 or mfmode == 0
+	elseif option == 2 then
+		if turtle.getFuelLevel ~= "unlimited" then
+			repeat
+				term.clear()
+				term.setCursorPos(1,1)
+				print("[           FUEL CHEST SIDE           ]")
+				print("---------------------------------------")
+				term.setCursorPos(1,3)
+				print("1-Up")
+				term.setCursorPos(1,4)
+				print("2-Right")
+				term.setCursorPos(1,5)
+				print("3-Bottom")
+				term.setCursorPos(1,6)
+				print("4-Left")
+				term.setCursorPos(1,7)
+				print("5-Back")
+				term.setCursorPos(1,9)
+				print("currently:"..fchestside)
+				term.setCursorPos(1,11)
+				print("Type the number and press enter")
+				term.setCursorPos(1,12)
+				print("---------------------------------------")
+				term.setCursorPos(1,13)
+				fchestside = (io.read() * 1)
+			until fchestside == 1 or fchestside == 2 or fchestside == 3 or fchestside == 4 or fchestside == 5
+		end
+		repeat
+			term.clear()
+			term.setCursorPos(1,1)
+			print("[           ITEM CHEST SIDE           ]")
+			print("---------------------------------------")
+			term.setCursorPos(1,3)
+			print("1-Up")
+			term.setCursorPos(1,4)
+			print("2-Right")
+			term.setCursorPos(1,5)
+			print("3-Bottom")
+			term.setCursorPos(1,6)
+			print("4-Left")
+			term.setCursorPos(1,7)
+			print("5-Back")
+			term.setCursorPos(1,9)
+			print("currently:"..ichestside)
+			term.setCursorPos(1,11)
+			print("Type the number and press enter")
+			term.setCursorPos(1,12)
+			print("---------------------------------------")
+			term.setCursorPos(1,13)
+			ichestside = (io.read() * 1)
+		until (ichestside == 1 or ichestside == 2 or ichestside == 3 or ichestside == 4 or ichestside == 5) == true and fchestside ~= ichestside
+	elseif option == 3 then
+		repeat
+			term.clear()
+			term.setCursorPos(1,1)
+			print("[            SLEEPING TIME            ]")
+			print("---------------------------------------")
+			print("Hours between harvests? Can be a decimal number using a dot.")
+			print("")
+			if delay == nil or delay == 0 then
+				print("currently not set")
+			else
+				print("currently "..delay)
+			end
+			print("")
+			print("i.e 0.5 -> 30 minutes")
+			term.setCursorPos(1,13)
+			delay = (io.read() * 1)
+		until delay >= 0
+	elseif option == 4 then
+		term.clear()
+		term.setCursorPos(1,1)
+		print("[          REPLANTING OPTIONS         ]")
+		print("---------------------------------------")
+		print("Please type the name of the item to")
+		print("attempt to plant, or press enter")
+		print("to not attempt replanting.")
+		print("Note that seeds must be added manually,")
+		print("or be found while harvesting.")
+		print("Note: a good bet is \"seed\" -- because")
+		print("then any item with \"seed\" in the name")
+		print("will be attempted.")
+		if attemptplant == nil or attemptplant == "" then
+			print("currently not set")
+		else
+			print("currently \""..attemptplant.."\"")
+		end
+		term.setCursorPos(1,13)
+		attemptplant = io.read()
+	end
+end
+
+-- main options menue
+function mainoptions()
+	local option=-1
+	repeat
+		repeat
+			term.clear()
+			term.setCursorPos(1,1)
+			print("[           MFAS V3 OPTIONS           ]")
+			print("---------------------------------------")
+			term.setCursorPos(1,3)
+			print("1-Multi floor mode")
+			term.setCursorPos(1,4)
+			print("2-Change sides of chests")
+			term.setCursorPos(1,5)
+			print("3-Change sleeping time")
+			term.setCursorPos(1,6)
+			print("4-Change sleeping time")
+			term.setCursorPos(1,7)
+			print("0-Back to main menu")
+			term.setCursorPos(1,9)
+			print("Type the number and press enter")
+			term.setCursorPos(1,12)
+			print("---------------------------------------")
+			term.setCursorPos(1,13)
+			option = (io.read() * 1)
+		until option == 1 or option == 2 or option == 3 or option == 4 or option == 0
+		options(option)
+	until option == 0
+end
+
+function gui()
+	repeat
+		term.clear()
+		term.setCursorPos(1,1)
+		print("[               MFAS V3               ]")
+		print("---------------------------------------")
+		term.setCursorPos(1,3)
+		print("1-Run now")
+		term.setCursorPos(1,5)
+		print("2-Options")
+		term.setCursorPos(1,7)	
+		print("3-Last harvest info")
+		term.setCursorPos(1,9)
+		print("4-Close MFAS")
+		term.setCursorPos(1,11)
+		print("Type the number and press enter")
+		term.setCursorPos(1,12)
+		print("---------------------------------------")
+		term.setCursorPos(1,13)
+		repeat
+			term.setCursorPos(1,13)
+			option = io.read()*1
+		until option == 1 or option == 2 or option == 3 or option == 4
+		if option == 2 then
+			mainoptions()
+		elseif option == 3 then
+			info()
+			print("Press any key to exit")
+			os.pullEvent("key")
+		elseif option == 4 then
+			save()
+			term.clear()
+			term.setCursorPos(1,1)
+			print("Thanks for using MFAS - Mendoza")
+			sleep(3)
+			os.reboot()
+		end
+	until option == 1
+	runlevel = 2
+	save()
+	term.clear()
+end
+
+--Harvest the garden. Does ALL levels of a multi-level farm, then returns to start.
+--Also returns to start (remembering where it left off) if
+-- It's full (doesn't have at least two spaces available in inventory)
+-- Fuel level is low (specifically, less that total distance (in x,y, and z seperately) plus 50
+function main()
+	print("main")
+	while runlevel == 2 do
+		-- if full or in need of fuel, go home.
+		if (turtle.getFuelLevel() ~= "unlimited" and turtle.getFuelLevel() <= ((math.abs(x)) + (math.abs(y)) + (math.abs(z)) + 50) ) or
+				full() then
+			tgtx = x
+			tgty = y
+			tgtz = z
+			tgtf = f
+			if full() then
+				gocomplex("HSB")
+			else
+				gocomplex("HFB")
+			end
+		end
+		-- The main reason we're here! Going forward endlessly!
+		forward()
+		info()
+		if hitawall() then
+			if nextturn == -1 then
+				--If we've never turned before, try turning left, but go right if that's a wall...
+				left()
+				if hitawall() then
+					nextturn = 1
+					gocomplex("rrfr")
+				else
+					nextturn = 0
+					gocomplex("fl")
+				end
+			elseif nextturn == 1 then
+				nextturn = 0
+				gocomplex("lfl")
+			elseif nextturn == 0 then
+				nextturn = 1
+				gocomplex("rfr")
+			end
+		end
+	end
+end
+
+function wait()
+	term.clear()
+	if remaining <= 0 then remaining = (delay*360) end
+	if remaining <= 0 then
+		-- User specified 0 delay. Interpreted as "wait for a redstone signal"
+		term.clear()
+		term.setCursorPos(1,1)
+		print("Waiting before starting next harvest")
+		print("Send a redstone signal to start harvesting")
+		print("The recommended way to do this is put a")
+		print("button on the block the turtle is sitting")
+		print("on. Hold ctrl-T to interrupt.")
+		os.pullEvent("redstone")
+	else
+		repeat
+			remaining = remaining - 1
+			save()
+			term.clear()
+			term.setCursorPos(1,1)
+			print("Waiting before starting next harvest")
+			print("")
+			print((remaining*10) .. " seconds remaining")
+			sleep(10)
+		until remaining <= 0
+	end
+	term.clear()
+	runlevel = 1
+	save()
+end
+
+-- return false if we have at least two empty slots
+function full()
+	-- assumption: 16 slots and slot 16 is already empty (slots should be filled in order...)
+	return turtle.getItemCount(15) > 0 
+end
+
+-- Refuel
+function setup(tgtfuel)
+	local slot = 0
+	--Empty the inventory into the item chest
+	if ichestside == 2 then rotate(2)
+	elseif ichestside == 5 then rotate(3)
+	elseif ichestside == 4 then rotate(4)
+	end
+
+	for slot=1,16 do
+		turtle.select(slot)
+		titems = titems + turtle.getItemCount(slot)
+		if ichestside == 1 then turtle.dropUp()
+			elseif ichestside == 3 then turtle.dropDown()
+			elseif ichestside == 2 or ichestside == 4 or ichestside == 5 then turtle.drop()
+		end
+	end
+	--refuel if requested to do so. Note we assume inventory is empty, thus sucked item goes into slot 1
+	if tgtfuel > 0 and turtle.getFuelLevel() ~= "unlimited" then
+		if fchestside == 2 then rotate(2)
+		elseif fchestside == 5 then rotate(3)
+		elseif fchestside == 4 then rotate(4)
+		end
+		turtle.select(1)
+		repeat
+			if fchestside == 1 then turtle.suckUp()
+			elseif fchestside == 3 then turtle.suckDown()
+			elseif fchestside == 2 or fchestside == 4 or fchestside == 5 then turtle.suck()
+			end
+			if turtle.getItemCount(1) == 0 then
+				print("Nothing more in the fuel chest, cannot refuel!")
+				sleep(10)
+			end
+			repeat
+				local count = turtle.getItemCount(1)
+				-- This doesn't mean slot, this is a quantity
+				turtle.refuel(1)
+				if turtle.getItemCount(1) == count then
+					turtle.transferTo(16)
+					print("Bork! non-fuel items in fuel chest!")
+				end
+			until turtle.getFuelLevel() > tgtfuel or turtle.getItemCount(1) == 0
+		until turtle.getFuelLevel() > tgtfuel
+		--Drop any extra fuel items back into the fuel chest.
+		if fchestside == 1 then turtle.dropUp()
+		elseif fchestside == 3 then turtle.dropDown()
+		elseif fchestside == 2 or fchestside == 4 or fchestside == 5 then turtle.drop()
+		end
+	end
+	turtle.select(1)
+	rotate(1)
+	runlevel = 2
+	save()
+end
+
+
+--Runlevels: 
+--	0= first run, set options
+--  1= Before harvest (refuling, dropping off items)
+--  2= Harvesting
+--  3= Waiting
+--  4= multi-step movement (go, or some such)
+restore()
+-- This is command line arguments accessing code.
+args={...}
+if args[1] then
+	if args[1] == "reset" then
+		x=0 y=0 z=0 f=1 runlevel=2 complex="" nextturn=-1
+	elseif args[1] == "menu" then
+		gui()
+	elseif args[1] == "RESET" then
+		init_variables()
+	else
+		print("Unknown command line argument.")
+		usage()
+		os.exit()
+	end
+end
+if runlevel == nil then
+	--First run
+	init_variables()
+end
+
+while true do
+	if runlevel == 0 then
+		do
+			local h=fs.open("startup","w")
+			h.writeLine("shell.run(\"MFAS\")")
+			h.writeLine("")
+			h.close()
+		end
+		term.clear()
+		term.setCursorPos(1,1)
+		usage()
+		os.pullEvent("key")
+		term.clear()
+		term.setCursorPos(1,1)
+		print("[               MFAS V3               ]")
+		print("---------------------------------------")
+		term.setCursorPos(1,3)
+		print("Welcome to MFAS V3. Please put one of the blocks which the farms walls are made from into the turtle.")
+		os.pullEvent("key")
+		local slot = 1
+		wallblockname=""
+		repeat
+			turtle.select(slot)
+			this=turtle.getItemDetail(slot)
+			if this then
+				wallblockname = this.name
+				break
+			end
+			slot = slot + 1
+			if slot == 17 then
+				print("No, really, we need *something* to procced here, or hold ctrl-T to terminate program")
+				slot=1
+			end
+		until string.len(wallblockname) ~= 0
+		print("Thank you. wallblock set to ".. wallblockname )
+		print("Please take it back and press a key to continue.")
+		os.pullEvent("key")
+		turtle.select(1)
+		term.clear()
+		term.setCursorPos(1,1)
+		print("[               MFAS V3               ]")
+		print("---------------------------------------")
+		term.setCursorPos(1,3)
+		print("Before starting, set the options in the next page")
+		os.pullEvent("key")
+		options(1)
+		options(2)
+		options(3)
+		options(4)
+		runlevel = 1
+		save()
+		gui()
+	elseif runlevel == 1 then
+		if distance == 0 then
+			-- Guessing that we need about 1000 movements to harvest a farm?
+			setup(1000)
+		else
+			setup(distance) distance = 0
+		end
+	elseif runlevel == 2 then
+		main()
+	elseif runlevel == 3 then
+		wait()
+	elseif runlevel == 4 then
+		gocomplex()
+	elseif runlevel == 5 then
+		gui()
+	else
+		print("BORK! incorrect runlevel:"..runlevel)
+	end
+end
