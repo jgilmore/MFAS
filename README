@@ -1,0 +1,30 @@
+Created, without permission, from http://www.computercraft.info/forums2/index.php?/topic/16834-the-multi-farming-autonomous-script-v2-new-features/
+Credit goes to Mendoza for intial V2 script.
+
+To run from turtleOS:
+pastebin get KqR95e8A MFAS
+MAKE SURE TO LABEL YOUR TURTLE. Really, saves a ton of time: label set "MFAS"
+
+Major changes from V2.
+    
+Partial list of new features:
+    Goes around fluids (waterfall in multi-level farm)
+    Chests are also considered walls
+    Replants even if it didn't harvest (configurable)
+    No longer prompts for fuel chest location if turtle fuel is unlimited
+    No longer harvests the base of the reeds
+    Mod specific crop harvesting is now easier to add later
+    No longer digs up base minecraft non-crop items (half slabs over your water source, anyone?)
+    Command line options are now supported (menu,reset,RESET)
+    Now creates a "startup" file so is automatically restarted when you replace it, or reload the world.
+    Maybe more, I forget.
+
+Known bugs:
+	Doesn't handle wide water columns gracefully. At all.
+	Doesn't handle magical crops (probably, untested)
+	Doesn't handle other mods unless specifically told to (but easy to add them)
+	Doesn't automatically generate a label for your turtle if you didn't already label it. (It probably should)
+	Requires dirt or farmland at the edge for multi-floor farms (zivico farmland etc not supported, yet)
+
+Probably many more bugs to.
+
